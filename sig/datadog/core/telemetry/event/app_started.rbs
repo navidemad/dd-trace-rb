@@ -38,8 +38,6 @@ module Datadog
           def app_started?: -> bool?
 
           private
-          TARGET_OPTIONS: ::Array[::String]
-
           def products: (Datadog::Core::Configuration::Components components) -> telemetry_products
 
           def configuration: (untyped settings, Core::Configuration::AgentSettings agent_settings) -> ::Array[Configuration::Option::telemetry_configuration]
@@ -48,13 +46,27 @@ module Datadog
 
           def conf_value: (::String name, untyped value, Configuration::Option::Precedence::Value precedence) -> Configuration::Option::telemetry_configuration
 
-          def to_value: (Object value) -> Object
+          def to_value: (untyped value) -> Configuration::Option::telemetry_value
 
           def install_signature: (untyped settings) -> install_signature
 
-          def get_telemetry_origin: (untyped settings, String config_path) -> String
+          def configuration_options: (untyped settings) -> ::Array[Configuration::Option]
 
-          def get_telemetry_payload: (untyped settings, ::String config_path, ?format_value: bool) -> (::Array[Configuration::Option::telemetry_configuration] | ::Array[Configuration::Option::telemetry_configuration_value_not_stringified])
+          def integration_configuration_entries: (untyped tracing_settings) -> ::Array[Configuration::Option::telemetry_configuration]
+
+          def payload_entries_for_option: (Configuration::Option option, ?override_name: ::String?) -> ::Array[Configuration::Option::telemetry_configuration]
+
+          def formatted_telemetry_payload: (Configuration::Option option, ?override_name: ::String?) -> ::Array[Configuration::Option::telemetry_configuration]
+
+          def telemetry_payload_entry: (untyped source, name: ::String, value: Configuration::Option::telemetry_value) -> Configuration::Option::telemetry_configuration
+
+          def integration_telemetry_name: (::Symbol integration_name, Configuration::Option option, untyped matcher) -> ::String
+
+          def sanitize_matcher_name: (untyped matcher) -> ::String
+
+          def custom_to_s?: (Object value) -> bool
+
+          def settings_object?: (Object? value) -> bool
         end
       end
     end

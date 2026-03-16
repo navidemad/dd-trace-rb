@@ -72,42 +72,6 @@ module Datadog
             products
           end
 
-          TARGET_OPTIONS = %w[
-            dynamic_instrumentation.enabled
-            logger.level
-            profiling.advanced.code_provenance_enabled
-            profiling.advanced.endpoint.collection.enabled
-            profiling.enabled
-            runtime_metrics.enabled
-            tracing.analytics.enabled
-            tracing.propagation_style_extract
-            tracing.propagation_style_inject
-            tracing.enabled
-            tracing.log_injection
-            tracing.partial_flush.enabled
-            tracing.partial_flush.min_spans_threshold
-            tracing.report_hostname
-            tracing.sampling.rate_limit
-            apm.tracing.enabled
-            agent.host
-            tracing.sampling.default_rate
-            tracing.contrib.global_default_service_name.enabled
-            tracing.contrib.peer_service_defaults
-            tracing.contrib.peer_service_mapping
-            diagnostics.debug
-            opentelemetry.exporter.endpoint
-            opentelemetry.exporter.protocol
-            opentelemetry.exporter.timeout_millis
-            opentelemetry.metrics.enabled
-            opentelemetry.metrics.exporter
-            opentelemetry.metrics.endpoint
-            opentelemetry.metrics.protocol
-            opentelemetry.metrics.timeout_millis
-            opentelemetry.metrics.temporality_preference
-            opentelemetry.metrics.export_interval_millis
-            opentelemetry.metrics.export_timeout_millis
-          ].freeze
-
           def configuration(settings, agent_settings)
             # Special values that are not tied to a configuration option
             list = [
@@ -167,49 +131,12 @@ module Datadog
               ),
             )
 
-            # Extract writer options as separate configuration payloads.
-            get_telemetry_payload(settings, 'tracing.writer_options', format_value: false).each do |source|
-              # Steep: **source causes the ::Datadog::Core::Telemetry::Event::telemetry_configuration Record
-              # to become a Hash. We can assign it to a value and add an annotation to type it to the correct record.
-              # However, overwriting `name` and `value` will cause a FalseAssertion diagnostic.
-              list << {
-                **source,
-                name: 'tracing.writer_options.buffer_size',
-                value: to_value(source[:value][:buffer_size])
-              } # steep:ignore ArgumentTypeMismatch
-              list << {
-                **source,
-                name: 'tracing.writer_options.flush_interval',
-                value: to_value(source[:value][:flush_interval])
-              } # steep:ignore ArgumentTypeMismatch
+            configuration_options(settings).each do |option|
+              list.push(*payload_entries_for_option(option))
             end
 
-            # OpenTelemetry configuration options (using environment variable names)
-            otel_exporter_headers_sources = get_telemetry_payload(settings, 'opentelemetry.exporter.headers', format_value: false)
-            otel_exporter_headers_sources.each { |source| source[:value] = source[:value]&.map { |key, value| "#{key}=#{value}" }&.join(',') }
-            list.push(*otel_exporter_headers_sources)
-
-            otel_exporter_metrics_headers_sources = get_telemetry_payload(settings, 'opentelemetry.metrics.headers', format_value: false)
-            otel_exporter_metrics_headers_sources.each { |source| source[:value] = source[:value]&.map { |key, value| "#{key}=#{value}" }&.join(',') }
-            list.push(*otel_exporter_metrics_headers_sources)
-
-            # Add some more custom additional payload values here
-            if settings.logger.instance
-              logger_instance_sources = get_telemetry_payload(settings, 'logger.instance', format_value: false)
-              logger_instance_sources.each { |source| source[:value] = source[:value].class.to_s }
-              list.push(*logger_instance_sources)
-            end
-            if settings.respond_to?('appsec')
-              list.push(*get_telemetry_payload(settings, 'appsec.enabled'))
-              list.push(*get_telemetry_payload(settings, 'appsec.sca_enabled'))
-            end
-            if settings.respond_to?('ci')
-              list.push(*get_telemetry_payload(settings, 'ci.enabled'))
-            end
-
-            # Whitelist of configuration options to send in additional payload object
-            TARGET_OPTIONS.each do |option_path|
-              list.push(*get_telemetry_payload(settings, option_path))
+            integration_configuration_entries(settings.tracing).each do |entry|
+              list << entry
             end
 
             # We still want to report nil default and programmatic values as they are valid values
@@ -253,12 +180,29 @@ module Datadog
           end
 
           def to_value(value)
-            # TODO: Add float if telemetry starts accepting it
             case value
             when Integer, String, true, false, nil
               value
-            else
+            when Float
               value.to_s
+            when Hash
+              value.map { |key, nested_value| "#{key}:#{nested_value}" }.join(',')
+            when Array
+              value.join(',')
+            when Range
+              "#{value.begin}-#{value.end}"
+            when Datadog::Tracing::Contrib::StatusRangeMatcher
+              value.ranges.map { |range| range.is_a?(Range) ? "#{range.begin}-#{range.end}" : range.to_s }.join(',')
+            when Proc, Method
+              value.class.to_s
+            else
+              if value.is_a?(Module)
+                value.name.to_s
+              elsif custom_to_s?(value)
+                value.to_s
+              else
+                value.class.to_s
+              end
             end
           end
 
@@ -270,28 +214,123 @@ module Datadog
             }
           end
 
-          def get_telemetry_origin(settings, config_path)
-            split_option = config_path.split('.')
-            option_name = split_option.pop
-            return 'unknown' if option_name.nil?
+          def configuration_options(settings)
+            settings.class.options.each_key.each_with_object([]) do |name, options|
+              option = settings.send(:resolve_option, name)
+              value = option.get
 
-            # @type var parent_setting: Core::Configuration::Options
-            # @type var option: Core::Configuration::Option
-            parent_setting = settings.dig(*split_option)
-            option = parent_setting.send(:resolve_option, option_name.to_sym)
-            option.precedence_set&.origin || 'unknown'
+              if settings_object?(value)
+                options.concat(configuration_options(value))
+              else
+                options << option
+              end
+            end
           end
 
-          def get_telemetry_payload(settings, config_path, format_value: true)
-            split_option = config_path.split('.')
-            option_name = split_option.pop
-            return [] if option_name.nil?
+          def integration_configuration_entries(tracing_settings)
+            return [] unless tracing_settings.respond_to?(:instrumented_integrations)
 
-            # @type var parent_setting: Core::Configuration::Options
-            # @type var option: Core::Configuration::Option
-            parent_setting = settings.dig(*split_option)
-            option = parent_setting.send(:resolve_option, option_name.to_sym)
-            option.telemetry_payload(format_value: format_value)
+            tracing_settings.instrumented_integrations.each_with_object([]) do |(integration_name, integration), entries|
+              integration.configurations.each do |matcher, configuration|
+                configuration_options(configuration).each do |option|
+                  entries.push(
+                    *payload_entries_for_option(
+                      option,
+                      override_name: integration_telemetry_name(integration_name, option, matcher)
+                    )
+                  )
+                end
+              end
+            end
+          end
+
+          def payload_entries_for_option(option, override_name: nil)
+            case option.definition.name.to_s
+            when 'tracing.writer_options'
+              option.telemetry_payload(format_value: false).each_with_object([]) do |source, entries|
+                writer_options = source[:value] || {}
+
+                # Steep: **source causes the ::Datadog::Core::Telemetry::Event::telemetry_configuration Record
+                # to become a Hash. We can assign it to a value and add an annotation to type it to the correct record.
+                # However, overwriting `name` and `value` will cause a FalseAssertion diagnostic.
+                entries << {
+                  **source,
+                  name: 'tracing.writer_options.buffer_size',
+                  value: to_value(writer_options[:buffer_size])
+                } # steep:ignore ArgumentTypeMismatch
+                entries << {
+                  **source,
+                  name: 'tracing.writer_options.flush_interval',
+                  value: to_value(writer_options[:flush_interval])
+                } # steep:ignore ArgumentTypeMismatch
+              end
+            when 'opentelemetry.exporter.headers', 'opentelemetry.metrics.headers'
+              option.telemetry_payload(format_value: false).map do |source|
+                telemetry_payload_entry(
+                  source,
+                  name: override_name || source[:name],
+                  value: source[:value]&.map { |key, value| "#{key}=#{value}" }&.join(',')
+                )
+              end
+            when 'logger.instance'
+              return [] if option.get.nil?
+
+              option.telemetry_payload(format_value: false).map do |source|
+                telemetry_payload_entry(
+                  source,
+                  name: override_name || source[:name],
+                  value: source[:value]&.class&.to_s
+                )
+              end
+            else
+              formatted_telemetry_payload(option, override_name: override_name)
+            end
+          end
+
+          def formatted_telemetry_payload(option, override_name: nil)
+            option.telemetry_payload(format_value: false).map do |source|
+              telemetry_payload_entry(
+                source,
+                name: override_name || source[:name],
+                value: to_value(source[:value])
+              )
+            end
+          end
+
+          def telemetry_payload_entry(source, name:, value:)
+            # @type var result: Configuration::Option::telemetry_configuration
+            result = {
+              name: name,
+              value: value,
+              origin: source[:origin],
+              seq_id: source[:seq_id],
+            }
+            result[:config_id] = source[:config_id] if source[:config_id]
+            result
+          end
+
+          def integration_telemetry_name(integration_name, option, matcher)
+            return option.definition.env if matcher == :default && option.definition.env
+
+            name = "tracing.#{integration_name}"
+            name = "#{name}.#{sanitize_matcher_name(matcher)}" unless matcher == :default
+            "#{name}.#{option.definition.name}"
+          end
+
+          def sanitize_matcher_name(matcher)
+            matcher.to_s.gsub(/[^a-zA-Z0-9_.-]/, '_')
+          end
+
+          def custom_to_s?(value)
+            value.class.instance_method(:to_s).owner != Kernel
+          rescue NameError
+            false
+          end
+
+          def settings_object?(value)
+            value.class.respond_to?(:options) &&
+              value.respond_to?(:get_option) &&
+              value.respond_to?(:option_defined?)
           end
         end
       end

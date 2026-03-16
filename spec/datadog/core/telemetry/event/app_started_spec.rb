@@ -12,10 +12,12 @@ RSpec.describe Datadog::Core::Telemetry::Event::AppStarted do
   end
   let(:default_configuration) do
     [
-      # ['agent.host', '1.2.3.4'], # not reported by default
-      # ['DD_TRACE_SAMPLE_RATE', '0.5'], # not reported by default
+      ['agent.host', nil],
+      ['DD_ENV', nil],
+      ['DD_TRACE_SAMPLE_RATE', nil],
       ['DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED', false],
       ['DD_TRACE_DEBUG', false],
+      ['DD_TRACE_STARTUP_LOGS', nil],
       ['DD_TRACE_PEER_SERVICE_DEFAULTS_ENABLED', false],
       ['DD_TRACE_PEER_SERVICE_MAPPING', ''],
       ['DD_DYNAMIC_INSTRUMENTATION_ENABLED', false],
@@ -24,11 +26,13 @@ RSpec.describe Datadog::Core::Telemetry::Event::AppStarted do
       ['DD_PROFILING_ENDPOINT_COLLECTION_ENABLED', true],
       ['DD_PROFILING_ENABLED', false],
       ['DD_RUNTIME_METRICS_ENABLED', false],
-      # ['DD_TRACE_ANALYTICS_ENABLED', true], # not reported by default
+      ['DD_TRACE_ANALYTICS_ENABLED', nil],
       ['DD_TRACE_PROPAGATION_STYLE_EXTRACT', 'datadog,tracecontext,baggage'],
       ['DD_TRACE_PROPAGATION_STYLE_INJECT', 'datadog,tracecontext,baggage'],
       ['DD_TRACE_ENABLED', true],
       ['DD_LOGS_INJECTION', true],
+      ['DD_TRACE_HTTP_SERVER_ERROR_STATUSES', '500-599'],
+      ['DD_TRACE_HTTP_CLIENT_ERROR_STATUSES', '400-499'],
       ['tracing.partial_flush.enabled', false],
       ['tracing.partial_flush.min_spans_threshold', 500],
       ['DD_TRACE_REPORT_HOSTNAME', false],
@@ -196,6 +200,7 @@ RSpec.describe Datadog::Core::Telemetry::Event::AppStarted do
       before do
         Datadog.configure do |c|
           c.agent.host = '1.2.3.4'
+          c.env = 'telemetry-env'
           c.tracing.sampling.default_rate = 0.5
           c.tracing.contrib.global_default_service_name.enabled = true
           c.tracing.contrib.peer_service_mapping = {foo: 'bar'}
@@ -213,6 +218,7 @@ RSpec.describe Datadog::Core::Telemetry::Event::AppStarted do
       it 'reports set configuration' do
         expect(event.payload[:configuration]).to include(
           {name: 'agent.host', origin: 'code', seq_id: 5, value: '1.2.3.4'},
+          {name: 'DD_ENV', origin: 'code', seq_id: 5, value: 'telemetry-env'},
           {name: 'DD_TRACE_SAMPLE_RATE', origin: 'code', seq_id: 5, value: '0.5'},
           {name: 'DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED', origin: 'code', seq_id: 5, value: true},
           {name: 'DD_TRACE_PEER_SERVICE_MAPPING', origin: 'code', seq_id: 5, value: 'foo:bar'},
